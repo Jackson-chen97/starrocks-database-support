@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<drivers>
+  <driver id="starrocks" name="StarRocks" dialect="StarRocks" forced-dbms="STARROCKS" icon="/icons/starrocksDataSource.svg" group-with="starrocks" driver-class="com.starrocks.cj.jdbc.Driver">
+    <url-template name="default" template="jdbc:starrocks://{host::localhost}?[:{port::9030}][/{database:path}?][\?&lt;&amp;,user={user},password={password},{:identifier}={:param}&gt;]"/>
+    <artifact id="StarRocks Connector/J" name="StarRocks Connector/J" use="true" version="1.1.2"/>
+    <option name="auto-sync" value="true"/>
+    <constraints>
+      <constraint dbms="STARROCKS"/>
+    </constraints>
+  </driver>
+  <driver id="starrocks-mysql" name="StarRocks (MySQL protocol)" dialect="StarRocks" forced-dbms="STARROCKS" icon="/icons/starrocksDataSource.svg" group-with="starrocks" driver-class="com.mysql.cj.jdbc.Driver">
+    <url-template name="default" template="jdbc:mysql://{host::localhost}?[:{port::9030}][/{database:path}?][\?&lt;&amp;,user={user},password={password},{:identifier}={:param}&gt;]"/>
+    <artifact name="MySQL Connector/J" use="true" rolling="true"/>
+    <option name="auto-sync" value="true"/>
+    <property name="tinyInt1isBit" value="false"/>
+    <property name="characterEncoding" value="utf8"/>
+    <property name="characterSetResults" value="utf8"/>
+    <property name="yearIsDateType" value="false"/>
+    <constraints>
+      <constraint dbms="STARROCKS"/>
+    </constraints>
+  </driver>
+</drivers>

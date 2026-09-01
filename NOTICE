@@ -1,0 +1,10 @@
+StarRocks Database Support
+Copyright 2026 Jackson Chen
+
+Portions of this software are derived from "StarRocks Support"
+(https://github.com/ycyz97/starrocks-datagrip-plugin),
+Copyright the StarRocks Support contributors, licensed under the
+Apache License, Version 2.0. The original Apache-2.0 attribution is
+retained here as required by Section 4(d) of that license.
+
+This project is licensed under the MIT License (see LICENSE).

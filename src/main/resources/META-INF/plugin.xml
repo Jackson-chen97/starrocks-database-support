@@ -1,0 +1,127 @@
+<idea-plugin>
+    <id>com.jc.starrocks</id>
+    <name>StarRocks Database Support</name>
+    <vendor email="1024799414@qq.com">Jackson Chen</vendor>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.database</depends>
+
+    <description><![CDATA[
+        <p>StarRocks Database Support provides a dedicated StarRocks SQL dialect and database integration for DataGrip and other JetBrains IDEs with Database Tools.</p>
+
+        <h3>Features</h3>
+        <ul>
+            <li>StarRocks SQL parsing and syntax highlighting.</li>
+            <li>Code completion for StarRocks keywords, types, functions, snippets, and table properties.</li>
+            <li>Platform-based SQL formatting for the StarRocks dialect.</li>
+            <li>Dedicated StarRocks DBMS and data source integration.</li>
+            <li>JDBC metadata, StarRocks type system, object resolution, and native <code>SHOW CREATE</code> support.</li>
+            <li>Syntax coverage aligned with the StarRocks 4.1 documentation baseline.</li>
+        </ul>
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>Parsing and highlighting</h3>
+        <ul>
+            <li>Fixed <code>EXPLAIN</code> and <code>EXPLAIN ANALYZE</code> statement parsing.</li>
+            <li>Fixed parsing of parenthesized top-level queries.</li>
+            <li>Improved function and database-object syntax highlighting.</li>
+            <li>Fixed materialized-view clause parsing.</li>
+            <li>Improved analytic-clause alias formatting.</li>
+        </ul>
+
+        <h3>Functions and inspections</h3>
+        <ul>
+            <li>Improved function argument parsing and signature validation.</li>
+            <li>Added <code>OVER</code> clause completion for analytic functions.</li>
+            <li>Fixed false nested-aggregate inspection errors.</li>
+            <li>Unified built-in function metadata.</li>
+        </ul>
+
+        <h3>Formatting</h3>
+        <ul>
+            <li>Improved view, query, and clause formatting.</li>
+            <li>Fixed excessive select-list indentation.</li>
+        </ul>
+    ]]></change-notes>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <sql.dialect dbms="STARROCKS" implementationClass="com.jc.starrocks.datagrip.dialect.StarRocksDialect"/>
+        <sql.dialectCodeStyleProvider implementation="com.jc.starrocks.datagrip.format.StarRocksCodeStyleProvider"/>
+        <lang.parserDefinition language="StarRocks" implementationClass="com.jc.starrocks.datagrip.lang.StarRocksParserDefinition"/>
+        <lang.syntaxHighlighterFactory language="StarRocks" implementationClass="com.jc.starrocks.datagrip.highlight.StarRocksSyntaxHighlighterFactory"/>
+        <sql.formatterHelper language="StarRocks" implementationClass="com.jc.starrocks.datagrip.format.StarRocksFormatterHelper"/>
+        <completion.contributor language="StarRocks" implementationClass="com.jc.starrocks.datagrip.completion.StarRocksCompletionContributor"/>
+        <database.connectionInterceptor implementation="com.jc.starrocks.datagrip.database.StarRocksMatViewStatusLoader"/>
+        <database.explorer.decoration implementation="com.jc.starrocks.datagrip.database.StarRocksNodeDecoration"/>
+    </extensions>
+
+    <projectListeners>
+        <listener class="com.jc.starrocks.datagrip.database.StarRocksDdlFormatListener"
+                  topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
+    </projectListeners>
+
+    <applicationListeners>
+        <listener class="com.jc.starrocks.datagrip.database.StarRocksModelMigrationListener"
+                  topic="com.intellij.database.dataSource.DataSourceModelStorage$Listener"/>
+    </applicationListeners>
+
+    <actions>
+        <!-- Own popup submenu shown only when the selection contains a materialized view.
+             Overriding the platform's DatabaseView.ObjectContext.Alterations group by id is
+             ignored by ActionManager, so we mount a separate group on DatabaseViewPopupMenu
+             (the same parent that hosts Alterations). -->
+        <group id="StarRocks.Support.MatViewActions"
+               class="com.jc.starrocks.datagrip.database.StarRocksMatViewActionsGroup"
+               popup="true"
+               removeWhenHidden="true"
+               text="Materialized View Actions">
+            <add-to-group group-id="DatabaseViewPopupMenu" anchor="last"/>
+            <action id="StarRocks.Support.RefreshMatView"
+                    class="com.jc.starrocks.datagrip.database.RefreshStarRocksMatViewAction"
+                    text="Refresh Materialized View"
+                    description="Run REFRESH MATERIALIZED VIEW on the selected view"/>
+            <action id="StarRocks.Support.ActivateMatView"
+                    class="com.jc.starrocks.datagrip.database.ActivateStarRocksMatViewAction"
+                    text="Activate Materialized View"
+                    description="Run ALTER MATERIALIZED VIEW ... ACTIVE"/>
+            <action id="StarRocks.Support.DeactivateMatView"
+                    class="com.jc.starrocks.datagrip.database.DeactivateStarRocksMatViewAction"
+                    text="Deactivate Materialized View"
+                    description="Run ALTER MATERIALIZED VIEW ... INACTIVE"/>
+        </group>
+    </actions>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="StarRocks Support" displayType="BALLOON"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.intellij.database">
+        <dbms id="STARROCKS" instance="com.jc.starrocks.datagrip.database.StarRocksDbms.INSTANCE"/>
+        <!-- Required for the DBMS to appear in the "+" new-data-source list: the platform only
+             lists pseudo-supported members of a known family (same registration the working
+             third-party StarRocks driver plugin uses). -->
+        <extensionFallback dbms="STARROCKS" fallbackDbms="MYSQL"/>
+        <addToHSet item="STARROCKS" set="MYSQL_LIKE"/>
+        <addToHSet item="STARROCKS" set="PSEUDO_SUPPORTED"/>
+        <dialect dbms="STARROCKS" implementationClass="com.jc.starrocks.datagrip.database.StarRocksDatabaseDialect"/>
+        <modelFacade dbms="STARROCKS" implementationClass="com.jc.starrocks.datagrip.database.StarRocksModelFacade"/>
+        <introspector dbms="STARROCKS" implementationClass="com.intellij.database.dialects.base.introspector.jdbc.JdbcIntrospector$Factory"/>
+        <jdbcMetadataWrapper dbms="STARROCKS" implementationClass="com.jc.starrocks.datagrip.database.StarRocksMetadataWrapperFactory"/>
+        <jdbcSourceLoader dbms="STARROCKS" implementationClass="com.intellij.database.dialects.generic.introspector.jdbc.GenericJdbcSourceLoader"/>
+        <scriptGenerator dbms="STARROCKS" implementationClass="com.intellij.database.dialects.generic.generator.GenericScriptGenerator"/>
+        <namingService dbms="STARROCKS" implementationClass="com.intellij.database.dialects.generic.naming.GenericNamingService$Provider"/>
+        <sqlObjectBuilder dbms="STARROCKS" implementationClass="com.intellij.database.dialects.sql92.Sql92ObjectBuilder"/>
+        <definitionProvider dbms="STARROCKS" implementationClass="com.jc.starrocks.datagrip.database.StarRocksDefinitionProvider"/>
+        <typeSystem dbms="STARROCKS" implementationClass="com.jc.starrocks.datagrip.database.StarRocksTypeSystem"/>
+        <executionEnvironmentHelper dbms="STARROCKS" implementationClass="com.intellij.database.dialects.base.BaseExecutionEnvironmentHelper"/>
+        <dmlHelper dbms="STARROCKS" implementationClass="com.intellij.database.dialects.generic.GenericDmlHelper"/>
+        <gridHelper dbms="STARROCKS" implementationClass="com.intellij.database.dialects.generic.GenericGridHelper"/>
+        <hookUpHelper dbms="STARROCKS" implementationClass="com.intellij.database.dialects.generic.GenericHookUpHelper"/>
+        <errorHandler dbms="STARROCKS" implementationClass="com.intellij.database.dialects.generic.GenericDatabaseErrorHandler"/>
+        <jdbcHelper dbms="STARROCKS" implementationClass="com.intellij.database.remote.jdbc.helpers.GenericJdbcHelper"/>
+        <!--suppress PluginXmlValidity -->
+        <driversConfig config="databaseDrivers/starrocks-drivers.xml"/>
+        <artifactsConfig config="databaseDrivers/starrocks-artifacts.xml"/>
+    </extensions>
+</idea-plugin>
