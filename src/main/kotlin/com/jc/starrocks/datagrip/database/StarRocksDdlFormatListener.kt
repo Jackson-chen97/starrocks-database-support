@@ -1,8 +1,10 @@
 package com.jc.starrocks.datagrip.database
 
+import com.intellij.database.vfs.DatabaseElementFileType
 import com.intellij.database.vfs.DbStorageFileType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.Project
@@ -33,31 +35,62 @@ class StarRocksDdlFormatListener(private val project: Project) : FileEditorManag
         Collections.synchronizedMap(WeakHashMap())
 
     override fun fileOpened(source: FileEditorManager, file: VirtualFile) {
-        if (file.fileType !is DbStorageFileType) return
+        LOG.info("fileOpened path=${file.path} type=${file.fileType}")
+        // "Go to DDL" opens das:// element files whose type is DatabaseElementFileType
+        // (the .sql "source" variant); DbStorageFileType is kept for older platform builds.
+        if (file.fileType !is DatabaseElementFileType && file.fileType !is DbStorageFileType) return
         scheduleFormat(file, WAIT_ATTEMPTS, tail = false)
     }
 
     private fun scheduleFormat(file: VirtualFile, attemptsLeft: Int, tail: Boolean) {
-        if (attemptsLeft <= 0 || project.isDisposed || !file.isValid) return
+        if (attemptsLeft <= 0) {
+            LOG.info("poll budget exhausted: ${file.name}")
+            return
+        }
+        if (project.isDisposed || !file.isValid) return
         val budget = if (tail) TAIL_ATTEMPTS else WAIT_ATTEMPTS
         val delay = if (attemptsLeft == budget) 0L else RETRY_DELAY_MS
         alarm.addRequest({
             if (project.isDisposed || !file.isValid) return@addRequest
-            if (!FileEditorManager.getInstance(project).isFileOpen(file)) return@addRequest
-            val psiFile = PsiManager.getInstance(project).findFile(file) ?: return@addRequest
+            if (!FileEditorManager.getInstance(project).isFileOpen(file)) {
+                LOG.info("tab closed, stopping: ${file.name}")
+                return@addRequest
+            }
+            val psiFile = PsiManager.getInstance(project).findFile(file)
+            if (psiFile == null) {
+                LOG.info("psiFile null for ${file.name}, attempt=$attemptsLeft")
+                if (attemptsLeft > 1) scheduleFormat(file, attemptsLeft - 1, tail)
+                return@addRequest
+            }
             val text = psiFile.text
+            val isMv = text.uppercase().contains("MATERIALIZED VIEW")
+            LOG.info(
+                "poll ${file.name} attempt=$attemptsLeft tail=$tail lang=${psiFile.language} " +
+                    "len=${text.length} blank=${text.isBlank()} mv=$isMv sameAsFormatted=${lastFormatted[file] == text}"
+            )
             if (text.isBlank()) {
                 if (attemptsLeft > 1) scheduleFormat(file, attemptsLeft - 1, tail)
                 return@addRequest
             }
-            if (!text.uppercase().contains("MATERIALIZED VIEW")) return@addRequest
+            if (!isMv) {
+                LOG.info("not an MV definition, stopping: ${file.name}")
+                return@addRequest
+            }
             if (lastFormatted[file] != text) {
                 lastFormatted[file] = text
+                val preview = text.take(200).replace('\n', ' ')
+                LOG.info("reformatting ${file.name}: $preview")
                 ApplicationManager.getApplication().invokeLater {
                     if (psiFile.isValid) {
+                        val before = psiFile.text
                         WriteCommandAction.runWriteCommandAction(project, "Reformat", null, {
                             CodeStyleManager.getInstance(project).reformat(psiFile, false)
                         })
+                        val after = psiFile.text
+                        LOG.info(
+                            "reformatted ${file.name}: beforeLen=${before.length} afterLen=${after.length} " +
+                                "changed=${before != after} afterPreview=${after.take(200).replace('\n', ' ')}"
+                        )
                     }
                 }
             }
@@ -70,6 +103,7 @@ class StarRocksDdlFormatListener(private val project: Project) : FileEditorManag
     }
 
     private companion object {
+        private val LOG = Logger.getInstance(StarRocksDdlFormatListener::class.java)
         const val WAIT_ATTEMPTS = 120
         const val TAIL_ATTEMPTS = 12
         const val RETRY_DELAY_MS = 250L

@@ -5,6 +5,7 @@ import com.intellij.database.dialects.AbstractDefinitionProvider
 import com.intellij.database.model.DasObject
 import com.intellij.database.model.ObjectKind
 import com.intellij.database.util.DasUtil
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.util.PairConsumer
 
 class StarRocksDefinitionProvider : AbstractDefinitionProvider() {
@@ -21,15 +22,23 @@ class StarRocksDefinitionProvider : AbstractDefinitionProvider() {
         val statement = remoteConnection.createStatement()
         try {
             objects.filter(::isSupported).forEach { obj ->
+                val statementText = StarRocksDdlStatements.showCreateStatement(obj.kind, qualifiedName(obj))
                 try {
-                    val statementText = StarRocksDdlStatements.showCreateStatement(obj.kind, qualifiedName(obj))
+                    LOG.info("fetchSources: $statementText")
                     val resultSet = statement.executeQuery(statementText)
                     try {
-                        consumer.consume(obj, if (resultSet.next()) extractDefinition(resultSet) else "")
+                        val definition = if (resultSet.next()) extractDefinition(resultSet) else ""
+                        LOG.info(
+                            "fetchSources consumed ${obj.name}: len=${definition.length} " +
+                                "hasAs=${definition.uppercase().contains(" AS ")} " +
+                                "preview=${definition.take(200).replace('\n', ' ')}"
+                        )
+                        consumer.consume(obj, definition)
                     } finally {
                         resultSet.close()
                     }
                 } catch (t: Throwable) {
+                    LOG.warn("fetchSources failed for ${obj.name}: $statementText", t)
                     consumer.consume(obj, t)
                 }
             }
@@ -66,6 +75,7 @@ class StarRocksDefinitionProvider : AbstractDefinitionProvider() {
     }
 
     companion object {
+        private val LOG = Logger.getInstance(StarRocksDefinitionProvider::class.java)
         private val SUPPORTED_KINDS: Set<ObjectKind> = setOf(
             ObjectKind.TABLE,
             ObjectKind.VIEW,
