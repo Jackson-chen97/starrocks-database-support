@@ -26,7 +26,8 @@ class StarRocksFormatterHelper : SqlFormatterHelper {
                 "StarRocks view column alias list"
             ) { node ->
                 generateSequence(node) { it.treeParent }.any { ancestor ->
-                    ancestor.elementType == SqlCompositeElementTypes.SQL_CREATE_VIEW_STATEMENT
+                    ancestor.elementType == SqlCompositeElementTypes.SQL_CREATE_VIEW_STATEMENT ||
+                        ancestor.elementType == SqlCompositeElementTypes.SQL_CREATE_MATERIALIZED_VIEW_STATEMENT
                 }
             },
             ::StarRocksViewColumnAliasListBlock

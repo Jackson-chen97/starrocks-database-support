@@ -707,15 +707,90 @@ class StarRocksParsingTest : BasePlatformTestCase() {
         )
     }
 
-    fun testCreateMaterializedViewDoesNotAcceptViewColumnAliases() {
+    fun testCreateMaterializedViewAcceptsColumnDefinitions() {
         val file = createPsiFile(
-            "CREATE MATERIALIZED VIEW analytics.invalid_sales (order_id COMMENT 'id') " +
-                "REFRESH MANUAL AS SELECT order_id FROM sales;"
+            """
+                CREATE MATERIALIZED VIEW analytics.good_sales (order_id COMMENT 'order', region COMMENT 'region')
+                REFRESH MANUAL AS SELECT order_id FROM sales;
+            """.trimIndent()
+        )
+        val errors = PsiTreeUtil.findChildrenOfType(file, PsiErrorElement::class.java)
+        assertTrue(
+            "Documented materialized-view column definitions must parse.\n${psiSummary(file)}",
+            errors.isEmpty()
+        )
+        val statement = elementsOfType(file, SqlCompositeElementTypes.SQL_CREATE_MATERIALIZED_VIEW_STATEMENT)
+            .filterIsInstance<com.intellij.sql.psi.SqlCreateViewStatement>()
+            .single()
+        assertEquals(listOf("order_id", "region"), statement.columnAliases.map { it.name })
+        assertTrue(
+            "Materialized-view column comments must stay inside the alias definition PSI.\n${psiSummary(file)}",
+            statement.columnAliases.all { it.text.contains("COMMENT", ignoreCase = true) }
         )
 
+        val productionLike = createPsiFile(
+            """
+                CREATE MATERIALIZED VIEW `mv_ads_ztc_goods_active_rate_ba_region_monthly` (
+                    `stat_month` COMMENT "统计月份",
+                    `ba_region_id` COMMENT "大区ID",
+                    `ba_region_name` COMMENT "大区名称",
+                    `goods_id` COMMENT "商品ID",
+                    `goods_name` COMMENT "商品名称",
+                    `active_goods_cnt` COMMENT "动销商品数",
+                    `total_goods_cnt` COMMENT "在架商品总数",
+                    `active_rate` COMMENT "商品动销率",
+                    `active_amt` COMMENT "动销金额",
+                    `etl_time` COMMENT "etl时间"
+                ) COMMENT "【指标】商品动销率-大区-月度"
+                DISTRIBUTED BY HASH(`stat_month`)
+                REFRESH ASYNC EVERY(INTERVAL 1 HOUR)
+                PROPERTIES ("replicated_storage"="true","replication_num"="1","storage_medium"="HDD")
+                AS WITH ba_regions AS (
+                    SELECT region_id, MAX(region_name) AS region_name
+                    FROM mv_dim_ztc_ba_service_provider
+                    WHERE region_id IS NOT NULL
+                    GROUP BY region_id
+                ), monthly_goods AS (
+                    SELECT stat_month, ba_region_id, goods_id, active_amt
+                    FROM mv_dws_ztc_goods_sales_ba_region_monthly
+                )
+                SELECT
+                    m.stat_month,
+                    r.ba_region_id,
+                    MAX(r.region_name) AS ba_region_name,
+                    COUNT(DISTINCT m.goods_id) AS active_goods_cnt,
+                    SUM(m.active_amt) AS active_amt,
+                    CURRENT_TIMESTAMP() AS etl_time
+                FROM monthly_goods m
+                JOIN ba_regions r ON m.ba_region_id = r.region_id
+                GROUP BY m.stat_month, r.ba_region_id;
+            """.trimIndent()
+        )
+        val productionErrors = PsiTreeUtil.findChildrenOfType(productionLike, PsiErrorElement::class.java)
         assertTrue(
-            "Materialized views must not consume the ordinary-view column alias syntax.\n${psiSummary(file)}",
-            PsiTreeUtil.findChildrenOfType(file, PsiErrorElement::class.java).isNotEmpty()
+            "Production materialized-view DDL with a column list must parse without PSI errors: " +
+                productionErrors.joinToString("\n") { "${it.errorDescription}: `${it.text}`" },
+            productionErrors.isEmpty()
+        )
+        val productionStatement = elementsOfType(
+            productionLike,
+            SqlCompositeElementTypes.SQL_CREATE_MATERIALIZED_VIEW_STATEMENT
+        ).filterIsInstance<com.intellij.sql.psi.SqlCreateViewStatement>().single()
+        assertEquals(
+            "The column list must expose all ten documented column definitions.\n${psiSummary(productionLike)}",
+            listOf(
+                "stat_month",
+                "ba_region_id",
+                "ba_region_name",
+                "goods_id",
+                "goods_name",
+                "active_goods_cnt",
+                "total_goods_cnt",
+                "active_rate",
+                "active_amt",
+                "etl_time"
+            ),
+            productionStatement.columnAliases.map { it.name.trim('`') }
         )
     }
 
@@ -1877,9 +1952,12 @@ class StarRocksParsingTest : BasePlatformTestCase() {
         }
         val manager = LocalDataSourceManager.getInstance(project)
         manager.addDataSource(dataSource)
-        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
-        val dbDataSource = DbPsiFacade.getInstance(project).findDataSource(dataSource.uniqueId)
-        assertNotNull(dbDataSource)
+        val dbDataSource = waitForDbPsiDataSource(dataSource.uniqueId)
+        assertNotNull(
+            "DbPsi must register the temporary data source after LocalDataSourceManager.addDataSource; " +
+                "registration is asynchronous and can lag behind the EDT event queue.",
+            dbDataSource
+        )
         assertSame("DbPsi data source must expose the test model.", model, dbDataSource?.model)
         val schemaPsi = dbDataSource?.findElement(schema)
         val tablePsi = dbDataSource?.findElement(table)
@@ -3135,5 +3213,28 @@ class StarRocksParsingTest : BasePlatformTestCase() {
             .filter { it.isNotEmpty() && !it.startsWith("#") }
             .map { line -> testDataDir.resolve(line.substringBefore('=').trim()) }
             .onEach { fixture -> assertTrue("Missing scenario fixture: ${fixture.absolutePath}", fixture.isFile) }
+    }
+
+    /**
+     * Waits until DbPsi has registered the given data source, pumping the EDT event queue and
+     * letting any asynchronous registration work between pumps. The registration can take tens of
+     * seconds in the test environment, so a single [PlatformTestUtil.dispatchAllEventsInIdeEventQueue]
+     * followed by an immediate lookup is not sufficient.
+     */
+    private fun waitForDbPsiDataSource(uniqueId: String): DbDataSource? {
+        val deadline = System.currentTimeMillis() + 40_000L
+        while (true) {
+            PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            val dbDataSource = DbPsiFacade.getInstance(project).findDataSource(uniqueId)
+            if (dbDataSource != null || System.currentTimeMillis() >= deadline) {
+                return dbDataSource
+            }
+            try {
+                Thread.sleep(100L)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return DbPsiFacade.getInstance(project).findDataSource(uniqueId)
+            }
+        }
     }
 }

@@ -170,7 +170,7 @@ create_view_statement ::= "CREATE" ("OR" "REPLACE")? "VIEW" if_not_exists? view_
   recoverWhile=statement_recover
 }
 
-create_materialized_view_statement ::= "CREATE" "MATERIALIZED" "VIEW" if_not_exists? materialized_view_reference materialized_view_options as_select_clause {
+create_materialized_view_statement ::= "CREATE" "MATERIALIZED" "VIEW" if_not_exists? materialized_view_reference materialized_view_column_list? materialized_view_options as_select_clause {
   elementType="SQL_CREATE_MATERIALIZED_VIEW_STATEMENT"
   elementTypeFactory="com.jc.starrocks.datagrip.lang.StarRocksElementFactory.elementType"
   pin=3
@@ -200,6 +200,10 @@ materialized_view_partition_clause ::= "PARTITION" "BY" (function_call | column_
   elementTypeFactory="com.jc.starrocks.datagrip.lang.StarRocksElementFactory.elementType"
   pin=2
   recoverWhile=clause_recover
+}
+materialized_view_column_list ::= "(" view_column ("," view_column)* ","? ")" {
+  elementType="SQL_COLUMN_ALIAS_LIST"
+  elementTypeFactory="com.jc.starrocks.datagrip.lang.StarRocksElementFactory.elementType"
 }
 view_column_list ::= "(" view_column ("," view_column)* ","? ")" {
   elementType="SQL_COLUMN_ALIAS_LIST"
