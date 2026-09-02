@@ -1778,6 +1778,21 @@ class StarRocksParsingTest : BasePlatformTestCase() {
             "Qualified schemas must resolve their qualifier as a catalog/database.",
             ObjectKind.DATABASE in StarRocksDialect.INSTANCE.getParentDbTypes(mutableSetOf(), ObjectKind.SCHEMA)
         )
+        assertEquals(
+            "A materialized view is a kind of table for resolve-target acceptance.",
+            ObjectKind.TABLE,
+            StarRocksDialect.INSTANCE.getSuperKind(ObjectKind.MAT_VIEW)
+        )
+        assertEquals(
+            "Plain tables keep the identity super-kind mapping.",
+            ObjectKind.TABLE,
+            StarRocksDialect.INSTANCE.getSuperKind(ObjectKind.TABLE)
+        )
+        assertEquals(
+            "Views are not remapped onto tables.",
+            ObjectKind.VIEW,
+            StarRocksDialect.INSTANCE.getSuperKind(ObjectKind.VIEW)
+        )
     }
 
     fun testCreateViewSchemaQualifierResolvesAgainstConnectedModel() {

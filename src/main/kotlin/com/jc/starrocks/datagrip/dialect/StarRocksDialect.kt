@@ -63,6 +63,21 @@ class StarRocksDialect private constructor() : SqlLanguageDialectBase("StarRocks
         return result
     }
 
+    /**
+     * StarRocks materialized views are regular queryable tables: an unqualified FROM reference
+     * expects kind TABLE, but the model object for a live async MV carries kind MAT_VIEW (the
+     * stock name index finds it by name, then [com.intellij.sql.psi.impl.SqlScopeProcessorBase]
+     * rejects it because the default getSuperKind is identity). Treat MAT_VIEW as a TABLE for
+     * resolve-target acceptance so MV references resolve like table references do.
+     *
+     * Deliberately leaves VIEW unmapped: mapping VIEW -> TABLE would also accept plain tables
+     * for view-expecting references.
+     */
+    override fun getSuperKind(kind: ObjectKind): ObjectKind = when (kind) {
+        ObjectKind.MAT_VIEW -> ObjectKind.TABLE
+        else -> super.getSuperKind(kind)
+    }
+
     override fun getBaseImports(dataSource: DbDataSource?, path: Array<out ObjectName?>?): TreePattern {
         if (dataSource == null || path == null) {
             return super.getBaseImports(dataSource, path)
