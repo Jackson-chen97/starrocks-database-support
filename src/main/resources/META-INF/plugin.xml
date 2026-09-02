@@ -7,41 +7,58 @@
     <depends>com.intellij.database</depends>
 
     <description><![CDATA[
-        <p>StarRocks Database Support provides a dedicated StarRocks SQL dialect and database integration for DataGrip and other JetBrains IDEs with Database Tools.</p>
+        <h3>功能</h3>
+        <p>StarRocks Database Support 为 DataGrip(及其他带 Database Tools 的 JetBrains IDE)提供独立的 StarRocks SQL 方言和完整的 StarRocks 数据库集成:</p>
+        <ul>
+            <li>在「新建数据源」对话框中注册独立的 StarRocks 数据源(STARROCKS,MySQL 家族),内置驱动配置。</li>
+            <li>StarRocks 专用 SQL 解析与语法高亮;关键字、数据类型和内置函数目录以 StarRocks 4.1 文档为基准。</li>
+            <li>代码补全:StarRocks 关键字、数据类型、内置函数与专属语法片段;表、列等数据库对象补全由平台 SQL 系统提供。</li>
+            <li>StarRocks 方言 SQL 格式化,以及函数签名校验等代码检查。</li>
+            <li>数据库对象模型:数据库、表、视图、物化视图;表/视图/物化视图支持原生 <code>SHOW CREATE</code> 定义视图(Go to DDL)。</li>
+            <li>物化视图 DDL 打开后自动格式化,列清单每列一行。</li>
+            <li>SQL 中表、视图、物化视图的对象解析与 schema 限定搜索路径,消除错误的 "Unable to resolve" 提示。</li>
+            <li>物化视图操作:右键执行 <code>REFRESH MATERIALIZED VIEW</code>、启用/停用(ACTIVE/INACTIVE);数据库树中显示物化视图状态。</li>
+        </ul>
 
         <h3>Features</h3>
+        <p>StarRocks Database Support provides a dedicated StarRocks SQL dialect and full StarRocks database integration for DataGrip (and other JetBrains IDEs with Database Tools):</p>
         <ul>
-            <li>StarRocks SQL parsing and syntax highlighting.</li>
-            <li>Code completion for StarRocks keywords, types, functions, snippets, and table properties.</li>
-            <li>Platform-based SQL formatting for the StarRocks dialect.</li>
-            <li>Dedicated StarRocks DBMS and data source integration.</li>
-            <li>JDBC metadata, StarRocks type system, object resolution, and native <code>SHOW CREATE</code> support.</li>
-            <li>Syntax coverage aligned with the StarRocks 4.1 documentation baseline.</li>
+            <li>Registers a dedicated StarRocks data source (STARROCKS, MySQL family) in the new data source dialog, with bundled driver configuration.</li>
+            <li>Dedicated StarRocks SQL parsing and syntax highlighting; keyword, data-type, and built-in function catalogs aligned with the StarRocks 4.1 documentation.</li>
+            <li>Code completion for StarRocks keywords, data types, built-in functions, and dedicated snippets; database-object completion is provided by the platform SQL system.</li>
+            <li>SQL formatting for the StarRocks dialect, plus inspections such as function signature validation.</li>
+            <li>Database object model: databases, tables, views, materialized views; native <code>SHOW CREATE</code> definition views (Go to DDL) for tables, views, and materialized views.</li>
+            <li>Materialized-view DDL is automatically reformatted when its definition tab opens, with one column per line.</li>
+            <li>Object resolution and schema-qualified search paths for tables, views, and materialized views in SQL, eliminating incorrect "Unable to resolve" highlights.</li>
+            <li>Materialized-view actions: run <code>REFRESH MATERIALIZED VIEW</code> and activate/deactivate (ACTIVE/INACTIVE) from the context menu; MV status is shown in the database tree.</li>
         </ul>
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>Parsing and highlighting</h3>
+        <h3>初始版本 / Initial release</h3>
+
+        <h4>功能</h4>
         <ul>
-            <li>Fixed <code>EXPLAIN</code> and <code>EXPLAIN ANALYZE</code> statement parsing.</li>
-            <li>Fixed parsing of parenthesized top-level queries.</li>
-            <li>Improved function and database-object syntax highlighting.</li>
-            <li>Fixed materialized-view clause parsing.</li>
-            <li>Improved analytic-clause alias formatting.</li>
+            <li>在「新建数据源」对话框中注册独立的 StarRocks 数据源(STARROCKS,MySQL 家族),内置驱动配置。</li>
+            <li>StarRocks 专用 SQL 解析与语法高亮;关键字、数据类型和内置函数目录以 StarRocks 4.1 文档为基准。</li>
+            <li>代码补全:StarRocks 关键字、数据类型、内置函数与专属语法片段;表、列等数据库对象补全由平台 SQL 系统提供。</li>
+            <li>StarRocks 方言 SQL 格式化,以及函数签名校验等代码检查。</li>
+            <li>数据库对象模型:数据库、表、视图、物化视图;表/视图/物化视图支持原生 <code>SHOW CREATE</code> 定义视图(Go to DDL)。</li>
+            <li>物化视图 DDL 打开后自动格式化,列清单每列一行。</li>
+            <li>SQL 中表、视图、物化视图的对象解析与 schema 限定搜索路径,消除错误的 "Unable to resolve" 提示。</li>
+            <li>物化视图操作:右键执行 <code>REFRESH MATERIALIZED VIEW</code>、启用/停用(ACTIVE/INACTIVE);数据库树中显示物化视图状态。</li>
         </ul>
 
-        <h3>Functions and inspections</h3>
+        <h4>Features</h4>
         <ul>
-            <li>Improved function argument parsing and signature validation.</li>
-            <li>Added <code>OVER</code> clause completion for analytic functions.</li>
-            <li>Fixed false nested-aggregate inspection errors.</li>
-            <li>Unified built-in function metadata.</li>
-        </ul>
-
-        <h3>Formatting</h3>
-        <ul>
-            <li>Improved view, query, and clause formatting.</li>
-            <li>Fixed excessive select-list indentation.</li>
+            <li>Registers a dedicated StarRocks data source (STARROCKS, MySQL family) in the new data source dialog, with bundled driver configuration.</li>
+            <li>Dedicated StarRocks SQL parsing and syntax highlighting; keyword, data-type, and built-in function catalogs aligned with the StarRocks 4.1 documentation.</li>
+            <li>Code completion for StarRocks keywords, data types, built-in functions, and dedicated snippets; database-object completion is provided by the platform SQL system.</li>
+            <li>SQL formatting for the StarRocks dialect, plus inspections such as function signature validation.</li>
+            <li>Database object model: databases, tables, views, materialized views; native <code>SHOW CREATE</code> definition views (Go to DDL) for tables, views, and materialized views.</li>
+            <li>Materialized-view DDL is automatically reformatted when its definition tab opens, with one column per line.</li>
+            <li>Object resolution and schema-qualified search paths for tables, views, and materialized views in SQL, eliminating incorrect "Unable to resolve" highlights.</li>
+            <li>Materialized-view actions: run <code>REFRESH MATERIALIZED VIEW</code> and activate/deactivate (ACTIVE/INACTIVE) from the context menu; MV status is shown in the database tree.</li>
         </ul>
     ]]></change-notes>
 

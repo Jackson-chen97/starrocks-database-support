@@ -13,7 +13,15 @@ completion are scoped to the StarRocks language.
 
 ## Capabilities
 
-- Registers a dedicated StarRocks SQL dialect, DBMS, and data source type.
+### Data source
+
+- Registers a dedicated StarRocks data source (STARROCKS, MySQL family) in the
+  new data source dialog, with bundled driver configuration.
+- Integrates JDBC metadata and the StarRocks type system with the Database
+  Tools platform.
+
+### SQL language
+
 - Parses StarRocks SQL with a JFlex-generated parser lexer and a
   Grammar-Kit-generated parser.
 - Reuses JetBrains SQL PSI element types for standard SQL structures so that
@@ -27,8 +35,21 @@ completion are scoped to the StarRocks language.
   properties while leaving ordinary table, column, type, and function
   completion to the platform SQL completion system.
 - Extends the platform SQL formatter with StarRocks SQL support.
-- Integrates JDBC metadata, the StarRocks type system, and native `SHOW CREATE`
-  statements with the Database Tools platform.
+
+### Database objects
+
+- Object model for databases, tables, views, and materialized views, with
+  native `SHOW CREATE` definition views (Go to DDL) for tables, views, and
+  materialized views.
+- Automatically reformats materialized-view DDL when its definition tab
+  opens, with one column per line in the column list.
+- Resolves table, view, and materialized-view references in SQL with
+  schema-qualified search paths, eliminating incorrect "Unable to resolve"
+  highlights for materialized views.
+- Loads materialized-view status and displays it on the database-tree node.
+- Context-menu actions for materialized views: refresh
+  (`REFRESH MATERIALIZED VIEW`) and activate/deactivate
+  (`ALTER MATERIALIZED VIEW ... ACTIVE/INACTIVE`).
 
 Syntax support is intentionally tracked as structured coverage rather than a
 claim of full StarRocks compatibility. The current target baseline is the

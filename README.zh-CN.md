@@ -10,14 +10,30 @@ StarRocks Database Support 是一款面向 JetBrains DataGrip/IntelliJ 的插件
 
 ## 功能
 
-- 注册独立的 StarRocks SQL 方言、DBMS 和数据源类型。
+### 数据源
+
+- 在「新建数据源」对话框中注册独立的 StarRocks 数据源（STARROCKS，MySQL 家族），内置驱动配置。
+- 将 JDBC 元数据和 StarRocks 类型系统接入 Database Tools 平台。
+
+### SQL 语言
+
 - 使用 JFlex 生成的解析 Lexer 和 Grammar-Kit 生成的 Parser 解析 StarRocks SQL。
 - 标准 SQL 结构尽量复用 JetBrains SQL PSI 类型，使平台格式化、引用、解析和数据库感知编辑能力可以继续工作。
 - 高亮 StarRocks 关键字、标识符、字面量、注释、参数和运算符。
 - 向 SQL 平台发布 StarRocks 关键字、标量类型、复杂类型和较完整的内置函数目录。
 - 为 StarRocks 专属片段和属性提供补充补全；普通表、列、类型和函数补全仍由平台 SQL 补全系统负责。
 - 基于平台 SQL 格式化器提供 StarRocks SQL 格式化支持。
-- 将 JDBC 元数据、StarRocks 类型系统和原生 `SHOW CREATE` 语句接入 Database Tools 平台。
+
+### 数据库对象
+
+- 支持数据库、表、视图、物化视图的对象模型；表/视图/物化视图支持原生
+  `SHOW CREATE` 定义视图（Go to DDL）。
+- 物化视图 DDL 打开后自动格式化，列清单每列一行。
+- SQL 中表、视图、物化视图的引用解析支持 schema 限定搜索路径，
+  消除物化视图错误的 "Unable to resolve" 提示。
+- 加载物化视图状态，并在数据库树节点上展示。
+- 物化视图右键操作：刷新（`REFRESH MATERIALIZED VIEW`）、
+  启用/停用（`ALTER MATERIALIZED VIEW ... ACTIVE/INACTIVE`）。
 
 项目通过结构化清单记录语法支持，不声明已经完全兼容 StarRocks。当前目标基准为 StarRocks 4.1 文档。已实现、部分实现、缺失和待核对内容见[语法覆盖清单](SYNTAX_COVERAGE.zh-CN.md)。
 
