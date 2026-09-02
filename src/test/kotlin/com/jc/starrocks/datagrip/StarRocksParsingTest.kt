@@ -3348,6 +3348,61 @@ class StarRocksParsingTest : BasePlatformTestCase() {
         assertNotNull("Default UNNEST output must resolve in the SELECT list.\n${psiSummary(file)}", unnest.resolve())
     }
 
+    fun testMaterializedViewFormatterExpandsSingleLineColumnList() {
+        val ddl = """
+            CREATE MATERIALIZED VIEW `mv_ads_ztc_goods_active_rate_ba_region_monthly` (`stat_month` COMMENT "统计月份", `region_id` COMMENT "经营分析区域ID；全国固定为99", `region_name` COMMENT "经营分析区域名称；全国固定为「全国」", `active_goods_cnt` COMMENT "动销商品种类数（分子，goods_id 去重）", `on_shelf_goods_cnt` COMMENT "上架商品种类数（分母，goods_id 去重）", `active_rate` COMMENT "商品动销率(%)", `target_value` COMMENT "当月目标值（按 region_id 匹配；全国=99）", `judgment_type` COMMENT "目标值判断类型：<、≤、>、≥", `completion_rate` COMMENT "完成率(%)=动销率/目标值×100")
+            COMMENT "【指标】商品动销率（经营分析大区）；月+区域；含全国行region_id=99；目标按区域id匹配"
+            DISTRIBUTED BY HASH(`stat_month`)
+            REFRESH ASYNC EVERY(INTERVAL 1 HOUR)
+            PROPERTIES (
+            "replicated_storage" = "true",
+            "replication_num" = "1",
+            "storage_medium" = "HDD"
+            )
+            AS
+            SELECT stat_month, region_id FROM dwd.goods
+        """.trimIndent()
+        val columns = listOf(
+            "stat_month", "region_id", "region_name", "active_goods_cnt",
+            "on_shelf_goods_cnt", "active_rate", "target_value", "judgment_type", "completion_rate"
+        )
+        val file = createPsiFile(ddl)
+        WriteCommandAction.runWriteCommandAction(project) {
+            CodeStyleManager.getInstance(project).reformat(file)
+        }
+        val errors = PsiTreeUtil.findChildrenOfType(file, PsiErrorElement::class.java)
+        assertTrue("Reformatted MV DDL must remain parseable: $errors\n${file.text}", errors.isEmpty())
+        val lines = file.text.lines()
+        columns.forEach { column ->
+            val columnLines = lines.filter { it.trimStart().startsWith("`$column`") }
+            assertEquals(
+                "Each MV column must occupy its own line.\n${file.text}",
+                1,
+                columnLines.size
+            )
+        }
+        assertTrue(
+            "No line may hold two or more MV column definitions.\n${file.text}",
+            lines.none { line -> columns.count { column -> line.contains("`$column`") } >= 2 }
+        )
+    }
+
+    fun testMaterializedViewFormatterSplitsShortSingleLineColumnList() {
+        val ddl = "CREATE MATERIALIZED VIEW `m1` (`a` COMMENT \"x\") COMMENT \"c\" AS SELECT 1 FROM t"
+        val file = createPsiFile(ddl)
+        WriteCommandAction.runWriteCommandAction(project) {
+            CodeStyleManager.getInstance(project).reformat(file)
+        }
+        val errors = PsiTreeUtil.findChildrenOfType(file, PsiErrorElement::class.java)
+        assertTrue("Reformatted MV DDL must remain parseable: $errors\n${file.text}", errors.isEmpty())
+        val columnLines = file.text.lines().filter { it.trimStart().startsWith("`a`") }
+        assertEquals(
+            "A single-column MV list must still expand to one column per line.\n${file.text}",
+            1,
+            columnLines.size
+        )
+    }
+
     private fun assertParsesWithoutPsiErrors(sql: String, fileName: String = "query.sql") {
         val parserDefinition = LanguageParserDefinitions.INSTANCE.forLanguage(StarRocksDialect.INSTANCE)
         assertTrue(

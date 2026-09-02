@@ -175,6 +175,10 @@ private class StarRocksViewOptionsBlock : SqlRangeBlock() {
 /**
  * View column lists follow the platform table-column layout, while table alias
  * lists retain the platform cortege behavior used by FROM aliases.
+ *
+ * `SHOW CREATE [MATERIALIZED] VIEW` returns the column list on a single line,
+ * so the block force-expands and force-wraps every column onto its own line
+ * regardless of the user's General SQL table-collapse settings.
  */
 class StarRocksViewColumnAliasListBlock : SqlTableParenthesizedColumnsSection() {
     override fun determineRole(node: ASTNode): BlockRole =
@@ -183,4 +187,9 @@ class StarRocksViewColumnAliasListBlock : SqlTableParenthesizedColumnsSection() 
         } else {
             super.determineRole(node)
         }
+
+    override fun userRequiresExpand(): Boolean = true
+
+    // Platform column-wrap setting encoding: 1 = ALWAYS (2 = CHOP_DOWN_IF_LONG, 3 = NORMAL).
+    override fun userWrapSetting(): Int = 1
 }
