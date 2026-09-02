@@ -39,6 +39,7 @@ import com.intellij.sql.editor.SqlColors
 import com.intellij.database.model.ObjectKind
 import com.intellij.database.types.DasArrayType
 import com.jc.starrocks.datagrip.database.StarRocksDbms
+import com.jc.starrocks.datagrip.database.StarRocksModelFacade
 import com.jc.starrocks.datagrip.database.StarRocksTypeSystem
 import com.intellij.database.dataSource.LocalDataSource
 import com.intellij.database.dataSource.LocalDataSourceManager
@@ -47,6 +48,11 @@ import com.intellij.database.dialects.generic.model.GenericModel
 import com.intellij.database.dialects.generic.model.GenericModelFacade
 import com.intellij.database.dialects.generic.model.GenericSchema
 import com.intellij.database.dialects.generic.model.GenericTable
+import com.intellij.database.dialects.postgres.model.PgDatabase
+import com.intellij.database.dialects.postgres.model.PgLocalTable
+import com.intellij.database.dialects.postgres.model.PgMatView
+import com.intellij.database.dialects.postgres.model.PgModel
+import com.intellij.database.dialects.postgres.model.PgSchema
 import com.intellij.database.model.ModelFactory
 import com.intellij.database.psi.DbDataSource
 import com.intellij.database.psi.DbElement
@@ -2227,6 +2233,175 @@ class StarRocksParsingTest : BasePlatformTestCase() {
         assertTrue(
             "Every field exposed by CTEs in a FULL JOIN must resolve: $unresolvedFullJoinColumns\n${psiSummary(fullJoinFile)}",
             unresolvedFullJoinColumns.isEmpty()
+        )
+    }
+
+    /**
+     * Reproduction of the user's live issue: unqualified references to materialized views in a FROM
+     * list are reported as "Unable to resolve table". Builds the production model shape (StarRocks
+     * facade = PostgreSQL meta-model, so the schema carries a MAT_VIEW-kind MatView family), connects
+     * it through a LocalDataSource exactly like a real console connection, and asserts that both the
+     * MV reference and a plain-table control resolve against the connected model.
+     */
+    fun testMaterializedViewTableReferenceResolvesAgainstConnectedModel() {
+        val model = StarRocksModelFacade().createModel(ModelFactory.BLACK_HOLE.textStorage) as PgModel
+        val database = model.root.databases.createOrGet("default_catalog") as PgDatabase
+        database.isCurrent = true
+        val schema = database.schemas.createOrGet("dws") as PgSchema
+        schema.isCurrent = true
+        val mv = schema.matViews.createOrGet("mv_dim_ztc_ba_service_provider") as PgMatView
+        mv.columns.createOrGet("service_provider_id")
+        val table = schema.tables.createOrGet("plain_table") as PgLocalTable
+        table.columns.createOrGet("id")
+
+        val dataSource = LocalDataSource.temporary().also {
+            it.name = "StarRocks MV test"
+            it.model = model
+            it.introspectionScope = com.intellij.database.util.TreePattern(
+                com.intellij.database.util.TreePatternUtils.create(
+                    null as Array<com.intellij.database.model.ObjectName>?,
+                    ObjectKind.DATABASE,
+                    com.intellij.database.util.TreePatternUtils.create(
+                        null as Array<com.intellij.database.model.ObjectName>?,
+                        ObjectKind.SCHEMA
+                    )
+                )
+            )
+        }
+        val manager = LocalDataSourceManager.getInstance(project)
+        manager.addDataSource(dataSource)
+        val dbDataSource = waitForDbPsiDataSource(dataSource.uniqueId)
+        assertNotNull(
+            "DbPsi must register the temporary data source after LocalDataSourceManager.addDataSource; " +
+                "registration is asynchronous and can lag behind the EDT event queue.",
+            dbDataSource
+        )
+        assertSame("DbPsi data source must expose the StarRocks model.", model, dbDataSource?.model)
+        val mvPsi = dbDataSource?.findElement(mv)
+        val tablePsi = dbDataSource?.findElement(table)
+        assertNotNull("The materialized view must be present in the DbPsi model.", mvPsi)
+        assertNotNull("The control table must be present in the DbPsi model.", tablePsi)
+
+        VirtualFileDataSourceProvider.EP.point.registerExtension(
+            object : VirtualFileDataSourceProvider() {
+                override fun getDataSource(project: com.intellij.openapi.project.Project, file: VirtualFile): DbDataSource? {
+                    return DbPsiFacade.getInstance(project).findDataSource(dataSource.uniqueId)
+                }
+            },
+            testRootDisposable
+        )
+
+        val file = createPsiFile("SELECT * FROM mv_dim_ztc_ba_service_provider, plain_table;")
+        assertTrue(
+            "The integration SQL file must be bound to the StarRocks data source.",
+            SqlDataSourceMappings.getInstance(project).getDataSources(file).contains(dbDataSource)
+        )
+        val references = elementsOfType(file, StarRocksElementTypes.SQL_TABLE_REFERENCE)
+            .filterIsInstance<SqlReferenceExpression>()
+        val tableReference = references.first { it.text == "plain_table" }
+        assertSame("The control table must resolve.", tablePsi, tableReference.resolve())
+        val mvReference = references.first { it.text == "mv_dim_ztc_ba_service_provider" }
+        assertSame(
+            "An unqualified materialized view in a FROM list must resolve like a table.",
+            mvPsi,
+            mvReference.resolve()
+        )
+
+        val qualifiedFile = createPsiFile("SELECT * FROM dws.mv_dim_ztc_ba_service_provider;")
+        val qualifiedMvReference = elementsOfType(qualifiedFile, StarRocksElementTypes.SQL_TABLE_REFERENCE)
+            .filterIsInstance<SqlReferenceExpression>()
+            .single()
+        assertSame(
+            "A schema-qualified materialized view must resolve like a qualified table.",
+            mvPsi,
+            qualifiedMvReference.resolve()
+        )
+    }
+
+    /**
+     * Mirror of the production layout for a StarRocks connection whose URL has no database and
+     * whose Schemas tab selected several schemas but no default (current) schema: DataGrip then
+     * exposes the top-level catalog as the default namespace with no current schema underneath.
+     * Unqualified table references must still resolve — the import state has to fall back to a
+     * search path across the catalog's schemas instead of pinning to the bare catalog.
+     */
+    fun testMaterializedViewTableReferenceResolvesWithoutCurrentSchema() {
+        val model = StarRocksModelFacade().createModel(ModelFactory.BLACK_HOLE.textStorage) as PgModel
+        val database = model.root.databases.createOrGet("default_catalog") as PgDatabase
+        database.isCurrent = true
+        val aiDba = database.schemas.createOrGet("ai_dba") as PgSchema
+        // Deliberately NOT marked current: the live data source has no default schema set.
+        val ods = database.schemas.createOrGet("ods_aidba_db") as PgSchema
+        val mv = aiDba.matViews.createOrGet("mv_dim_ztc_ba_service_provider") as PgMatView
+        mv.columns.createOrGet("service_provider_id")
+        val table = aiDba.tables.createOrGet("plain_table") as PgLocalTable
+        table.columns.createOrGet("id")
+        val qualifiedTarget = ods.tables.createOrGet("dat_indicator") as PgLocalTable
+        qualifiedTarget.columns.createOrGet("id")
+
+        val dataSource = LocalDataSource.temporary().also {
+            it.name = "StarRocks MV no-current-schema test"
+            it.model = model
+            it.introspectionScope = com.intellij.database.util.TreePattern(
+                com.intellij.database.util.TreePatternUtils.create(
+                    null as Array<com.intellij.database.model.ObjectName>?,
+                    ObjectKind.DATABASE,
+                    com.intellij.database.util.TreePatternUtils.create(
+                        null as Array<com.intellij.database.model.ObjectName>?,
+                        ObjectKind.SCHEMA
+                    )
+                )
+            )
+        }
+        val manager = LocalDataSourceManager.getInstance(project)
+        manager.addDataSource(dataSource)
+        val dbDataSource = waitForDbPsiDataSource(dataSource.uniqueId)
+        assertNotNull(
+            "DbPsi must register the temporary data source after LocalDataSourceManager.addDataSource.",
+            dbDataSource
+        )
+        val mvPsi = dbDataSource?.findElement(mv)
+        val tablePsi = dbDataSource?.findElement(table)
+        val qualifiedPsi = dbDataSource?.findElement(qualifiedTarget)
+        assertNotNull("The materialized view must be present in the DbPsi model.", mvPsi)
+        assertNotNull("The control table must be present in the DbPsi model.", tablePsi)
+        assertNotNull("The qualified table must be present in the DbPsi model.", qualifiedPsi)
+
+        VirtualFileDataSourceProvider.EP.point.registerExtension(
+            object : VirtualFileDataSourceProvider() {
+                override fun getDataSource(project: com.intellij.openapi.project.Project, file: VirtualFile): DbDataSource? {
+                    return DbPsiFacade.getInstance(project).findDataSource(dataSource.uniqueId)
+                }
+            },
+            testRootDisposable
+        )
+
+        val file = createPsiFile(
+            "SELECT * FROM mv_dim_ztc_ba_service_provider, plain_table, ods_aidba_db.dat_indicator;"
+        )
+        assertTrue(
+            "The integration SQL file must be bound to the StarRocks data source.",
+            SqlDataSourceMappings.getInstance(project).getDataSources(file).contains(dbDataSource)
+        )
+        val references = elementsOfType(file, StarRocksElementTypes.SQL_TABLE_REFERENCE)
+            .filterIsInstance<SqlReferenceExpression>()
+        val mvReference = references.first { it.text == "mv_dim_ztc_ba_service_provider" }
+        assertSame(
+            "An unqualified materialized view must resolve when no schema is set current.",
+            mvPsi,
+            mvReference.resolve()
+        )
+        val tableReference = references.first { it.text == "plain_table" }
+        assertSame(
+            "An unqualified table must resolve when no schema is set current.",
+            tablePsi,
+            tableReference.resolve()
+        )
+        val qualifiedReference = references.first { it.text == "ods_aidba_db.dat_indicator" }
+        assertSame(
+            "A schema-qualified table must resolve when no schema is set current.",
+            qualifiedPsi,
+            qualifiedReference.resolve()
         )
     }
 

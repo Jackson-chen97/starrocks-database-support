@@ -20,6 +20,7 @@ import com.intellij.sql.dialects.base.SqlLanguageDialectBase
 import com.intellij.sql.dialects.base.TokensHelper
 import com.intellij.sql.dialects.functions.SqlFunctionsUtil
 import com.intellij.sql.dialects.SqlDialectImplUtilCore
+import com.intellij.sql.dialects.SqlImportUtil
 import com.intellij.sql.psi.SqlGroupByClause
 import com.intellij.sql.psi.SqlHavingClause
 import com.intellij.sql.psi.SqlOrderByClause
@@ -78,19 +79,31 @@ class StarRocksDialect private constructor() : SqlLanguageDialectBase("StarRocks
         else -> super.getSuperKind(kind)
     }
 
+    /**
+     * StarRocks connections usually carry no database in their URL and no current schema, so the
+     * platform default namespace falls back to the top-level catalog (a DATABASE-kind namespace).
+     * A pattern pinned to that catalog without a schema level matches nothing underneath, and
+     * every unqualified table reference fails to resolve. Build the imports from the current
+     * schema when one is set; otherwise fall back to a search path across all schemas of the
+     * catalog so unqualified references can still resolve.
+     */
     override fun getBaseImports(dataSource: DbDataSource?, path: Array<out ObjectName?>?): TreePattern {
         if (dataSource == null || path == null) {
             return super.getBaseImports(dataSource, path)
         }
         val defaultNamespace = getDefaultNamespace(dataSource, null)
-        return if (defaultNamespace != null) {
+            ?: return getSchemaBaseImports(dataSource, path, false)
+        return if (defaultNamespace.kind == ObjectKind.SCHEMA) {
             SqlDialectImplUtilCore.createObjectPattern(
                 path,
                 defaultNamespace,
                 *emptyArray<TreePatternNode.Group>()
             )
         } else {
-            getSchemaBaseImports(dataSource, path, false)
+            val anySchema = SqlImportUtil.getSchemaGroups(listOf("*"))
+                ?: return getSchemaBaseImports(dataSource, path, false)
+            val catalog = SqlImportUtil.createPositiveDatabase(ObjectName.quoted(defaultNamespace.name), anySchema)
+            TreePattern(SqlImportUtil.createDataSources(path, catalog))
         }
     }
 
