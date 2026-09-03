@@ -1,7 +1,6 @@
 package com.jc.starrocks.datagrip.database
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -36,7 +35,10 @@ import java.util.WeakHashMap
  */
 class StarRocksDdlFormatListener(private val project: Project) : FileEditorManagerListener {
 
-    private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, project)
+    // EDT alarm: every poll reads the editor Document and the file's PSI, both of which require
+    // read access. On the EDT that access is implicit, so no (deprecated, and previously
+    // thread-violating) ReadAction wrapper is needed; a tick costs one regex plus one PSI lookup.
+    private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, project)
     private val lastFormatted: MutableMap<VirtualFile, String> =
         Collections.synchronizedMap(WeakHashMap())
 
@@ -66,14 +68,15 @@ class StarRocksDdlFormatListener(private val project: Project) : FileEditorManag
                 if (attemptsLeft > 1) scheduleFormat(file, attemptsLeft - 1, tail)
                 return@addRequest
             }
-            // PSI and document access from this pooled thread must run inside a read action.
-            val poll = ReadAction.compute<Pair<String, String>, Throwable> {
-                val psiFile = PsiManager.getInstance(project).findFile(file)
-                document.text to (psiFile?.language?.toString() ?: "?")
-            }
-            val text = poll.first
+            // Runs on the EDT (SWING_THREAD alarm), so document and PSI reads have implicit
+            // read access already; the actual reformat still happens inside a write command below.
+            val text = document.text
             val isMv = MV_PATTERN.containsMatchIn(text)
-            val psiLang = poll.second
+            val psiLang = try {
+                PsiManager.getInstance(project).findFile(file)?.language?.toString() ?: "?"
+            } catch (t: Throwable) {
+                "?"
+            }
             LOG.info(
                 "poll ${file.name} attempt=$attemptsLeft tail=$tail psiLang=$psiLang sqlLang=${probeSqlLanguage(file)} " +
                     "len=${text.length} blank=${text.isBlank()} mv=$isMv sameAsFormatted=${lastFormatted[file] == text}"
