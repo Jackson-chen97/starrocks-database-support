@@ -115,7 +115,9 @@ sealed class StarRocksMatViewAction(
     private fun connectionPoint(project: Project, e: AnActionEvent, obj: DasObject): DatabaseConnectionPoint? {
         (obj as? DbElement)?.dataSource?.let { ds ->
             (ds.connectionConfig as? DatabaseConnectionPoint)?.let { return it }
-            (ds.delegate as? DatabaseConnectionPoint)?.let { return it }
+            // RawDataSource behind the PSI wrapper. getDelegate() is @ApiStatus.Internal;
+            // getDelegateDataSource() is the public accessor for the same object.
+            (ds.delegateDataSource as? DatabaseConnectionPoint)?.let { return it }
         }
         var root: BasicRoot? = null
         var node: DasObject? = obj
