@@ -25,8 +25,10 @@ import java.util.concurrent.ConcurrentHashMap
  * Subclassing TableIt keeps every iteration/termination semantics platform-owned.
  *
  * Membership is decided by `information_schema.materialized_views` (async MVs only; sync MVs are
- * base tables to JDBC and stay where they are). Any query failure degrades to the stock behaviour
- * instead of breaking introspection.
+ * base tables to JDBC and stay where they are). That same query carries each MV's activity state,
+ * which is published to [StarRocksMatViewStatus] for the tree suffix — so no connection-time
+ * loader and no `<database.connectionInterceptor>` extension is involved any more.
+ * Any query failure degrades to the stock behaviour instead of breaking introspection.
  */
 class StarRocksMetadataWrapper(
     connection: DatabaseConnectionCore,
@@ -68,43 +70,77 @@ class StarRocksMetadataWrapper(
         }
     }
 
+    /**
+     * One `information_schema.materialized_views` query per database serves both purposes: the MV
+     * membership set (which relabels `VIEW` rows) and the activity states feeding
+     * [StarRocksMatViewStatus], whose cache the tree suffix reads. A server that does not expose
+     * `IS_ACTIVE` falls back to the names-only query and keeps rendering without a suffix.
+     */
     private fun materializedViewNames(schema: DatabaseMetaDataWrapper.Schema): Set<String> {
         val dbName = schema.schema ?: return emptySet()
         val key = dbName.lowercase()
         mvNameCache[key]?.let { return it }
         val safeName = dbName.replace("'", "''")
-        val names: Set<String> = try {
-            JdbcNativeUtil.computeRemote {
-                val found = HashSet<String>()
-                val statement = myConnection.remoteConnection.createStatement()
-                try {
-                    val rs = statement.executeQuery(
-                        "SELECT TABLE_NAME FROM information_schema.materialized_views" +
-                            " WHERE TABLE_SCHEMA = '$safeName'"
-                    )
-                    try {
-                        while (rs.next()) {
-                            rs.getString(1)?.let { found.add(it.lowercase()) }
-                        }
-                    } finally {
-                        rs.close()
-                    }
-                } finally {
-                    JdbcNativeUtil.closeRemoteStatementSafe(statement)
-                }
-                found
-            } ?: emptySet()
+        val (names, states) = try {
+            queryMatViews(safeName, "TABLE_NAME, IS_ACTIVE")
         } catch (t: Throwable) {
-            LOG.info("StarRocks MV membership query failed for '$dbName': ${t.message}")
-            emptySet()
+            LOG.info("StarRocks MV state query failed for '$dbName', retrying names only: ${t.message}")
+            try {
+                queryMatViews(safeName, "TABLE_NAME")
+            } catch (retry: Throwable) {
+                LOG.info("StarRocks MV membership query failed for '$dbName': ${retry.message}")
+                emptySet<String>() to emptyMap<String, MatViewState>()
+            }
         }
+        if (states.isNotEmpty()) StarRocksMatViewStatus.replace(key, states)
         mvNameCache[key] = names
         return names
     }
 
+    private fun queryMatViews(
+        safeDatabaseName: String,
+        columns: String,
+    ): Pair<Set<String>, Map<String, MatViewState>> =
+        JdbcNativeUtil.computeRemote {
+            val names = HashSet<String>()
+            val states = HashMap<String, MatViewState>()
+            val withState = columns.contains("IS_ACTIVE")
+            val statement = myConnection.remoteConnection.createStatement()
+            try {
+                val rs = statement.executeQuery(
+                    "SELECT $columns FROM information_schema.materialized_views" +
+                        " WHERE TABLE_SCHEMA = '$safeDatabaseName'"
+                )
+                try {
+                    while (rs.next()) {
+                        val name = rs.getString(1)?.lowercase() ?: continue
+                        names.add(name)
+                        if (withState) {
+                            val raw = rs.getString(2)
+                            val active = parseActive(raw)
+                            states[name] = MatViewState(active, if (active) null else raw)
+                        }
+                    }
+                } finally {
+                    rs.close()
+                }
+            } finally {
+                JdbcNativeUtil.closeRemoteStatementSafe(statement)
+            }
+            names to states
+        } ?: (emptySet<String>() to emptyMap())
+
     companion object {
         /** Matches JdbcTableType.MATERIALIZED_VIEW title. */
         const val MATERIALIZED_VIEW_TYPE = "MATERIALIZED VIEW"
+
+        /** `IS_ACTIVE` is a boolean on some servers and a status word on others. */
+        private fun parseActive(raw: String?): Boolean {
+            if (raw == null) return true
+            val value = raw.trim().lowercase()
+            return value != "false" && value != "0" && value != "inactive" && value != "invalid"
+        }
+
         private val LOG = logger<StarRocksMetadataWrapper>()
     }
 }

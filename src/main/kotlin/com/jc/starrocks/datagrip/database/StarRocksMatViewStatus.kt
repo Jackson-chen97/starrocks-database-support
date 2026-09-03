@@ -7,8 +7,8 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Per-datasource cache of StarRocks materialized-view activity state.
  *
- * Filled by [StarRocksMatViewStatusLoader] after MV introspection from
- * `information_schema.materialized_views` / `SHOW MATERIALIZED VIEWS`, read by
+ * Filled per database by [StarRocksMetadataWrapper] during the introspection tables pass (the
+ * same `information_schema.materialized_views` query that decides MV membership), and read by
  * [StarRocksDescriptionService.options] to suffix invalid MVs in the tree.
  */
 data class MatViewState(val isActive: Boolean, val reason: String?)
@@ -21,10 +21,14 @@ object StarRocksMatViewStatus {
         states[key(database, name)] = state
     }
 
-    /** Full refresh from a `schema -> (mv name -> state)` snapshot. */
-    fun replaceAll(newStates: Map<String, MatViewState>) {
-        states.clear()
-        newStates.forEach { (name, state) -> states[name.lowercase()] = state }
+    /**
+     * Replace one database's entries from its `mv name -> state` snapshot, leaving other databases
+     * alone: states are loaded per database during introspection, not once per connection.
+     */
+    fun replace(database: String, nameToState: Map<String, MatViewState>) {
+        val prefix = database.lowercase() + "."
+        states.keys.filter { it.startsWith(prefix) }.forEach { states.remove(it) }
+        nameToState.forEach { (name, state) -> states[prefix + name.lowercase()] = state }
     }
 
     fun get(element: DasObject): MatViewState? {

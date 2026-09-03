@@ -69,7 +69,6 @@
         <lang.syntaxHighlighterFactory language="StarRocks" implementationClass="com.jc.starrocks.datagrip.highlight.StarRocksSyntaxHighlighterFactory"/>
         <sql.formatterHelper language="StarRocks" implementationClass="com.jc.starrocks.datagrip.format.StarRocksFormatterHelper"/>
         <completion.contributor language="StarRocks" implementationClass="com.jc.starrocks.datagrip.completion.StarRocksCompletionContributor"/>
-        <database.connectionInterceptor implementation="com.jc.starrocks.datagrip.database.StarRocksMatViewStatusLoader"/>
         <database.explorer.decoration implementation="com.jc.starrocks.datagrip.database.StarRocksNodeDecoration"/>
     </extensions>
 
