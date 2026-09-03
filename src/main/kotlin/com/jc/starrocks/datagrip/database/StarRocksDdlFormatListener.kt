@@ -1,6 +1,7 @@
 package com.jc.starrocks.datagrip.database
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -65,13 +66,14 @@ class StarRocksDdlFormatListener(private val project: Project) : FileEditorManag
                 if (attemptsLeft > 1) scheduleFormat(file, attemptsLeft - 1, tail)
                 return@addRequest
             }
-            val text = document.text
-            val isMv = MV_PATTERN.containsMatchIn(text)
-            val psiLang = try {
-                PsiManager.getInstance(project).findFile(file)?.language?.toString()
-            } catch (t: Throwable) {
-                "?"
+            // PSI and document access from this pooled thread must run inside a read action.
+            val poll = ReadAction.compute<Pair<String, String>, Throwable> {
+                val psiFile = PsiManager.getInstance(project).findFile(file)
+                document.text to (psiFile?.language?.toString() ?: "?")
             }
+            val text = poll.first
+            val isMv = MV_PATTERN.containsMatchIn(text)
+            val psiLang = poll.second
             LOG.info(
                 "poll ${file.name} attempt=$attemptsLeft tail=$tail psiLang=$psiLang sqlLang=${probeSqlLanguage(file)} " +
                     "len=${text.length} blank=${text.isBlank()} mv=$isMv sameAsFormatted=${lastFormatted[file] == text}"
