@@ -47,5 +47,8 @@ bin/
 .intellijPlatform/
 .kotlin/
 
+### Plugin verifier local reports (regenerated each run) ###
+verification-*/
+
 ### Personal notes ###
 新建DataGrip插件支持StarRocks_*.md

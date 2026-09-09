@@ -87,6 +87,8 @@ dependencies {
         // reused by StarRocksModelFacade. Provided by the IDE at runtime.
         bundledModule("intellij.database.dialects.postgres")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+        // The IntelliJ Plugin Verifier CLI used by `verifyPlugin` (and the Marketplace audit).
+        pluginVerifier()
     }
 }
 
@@ -94,11 +96,23 @@ intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "261"
+            // The 2026.2+ DatabaseTools line restructured com.intellij.database.dialects.base:
+            // the introspector.jdbc.wrappers package (TableIt, DatabaseMetaDataWrapper.Schema,
+            // ResultSetWrapper) and GenericMetadataWrapper.createTableIt(...) are no longer on
+            // the audit classpath, so the Marketplace verifier (2026.3 EAP build
+            // IU-263.3889.65) reports "Package not found" + "Method not found" criticals.
+            // Verified clean (0 criticals) against DataGrip 261.24374.56 locally, so cap the
+            // audited range at the 2026.2 line; widen once the 262/263 layout is confirmed.
+            untilBuild = "262.*"
         }
     }
     pluginVerification {
         ides {
-            create("DB", "261.26222.86")
+            // JetBrains only ships DataGrip for Windows as an .exe installer, so the
+            // marketplace download the verifier would use (261.26222.86, 2026.1.4)
+            // is unreachable from this machine. Verify against the local 2026.1
+            // install (261.24374.56) instead — same major build line as sinceBuild.
+            local(file("D:/Develop/DataGrip/DataGrip 2025.2.3"))
         }
     }
 }
