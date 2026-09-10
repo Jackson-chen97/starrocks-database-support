@@ -35,7 +35,15 @@
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>Initial release / 初始版本</h3>
+        <h3>1.0.1</h3>
+
+        <h4>修复 / Fixes</h4>
+        <ul>
+            <li>修复物化视图右键操作（刷新 / 启用 / 停用）在 DataGrip 后台数据库进程（cook）被回收后报 <code>java.rmi.ConnectException: Connection refused</code> 的问题：操作前会校验待复用连接的远程桩是否存活，失效时自动建立新连接，无需手动重连。</li>
+            <li>Fixed Refresh / Activate / Deactivate materialized-view actions failing with <code>java.rmi.ConnectException: Connection refused</code> after DataGrip recycled its background database ("cook") process: the cached connection's remote stub is now probed before reuse, with a transparent fallback to establishing a fresh connection.</li>
+        </ul>
+
+        <h3>1.0.0 — Initial release / 初始版本</h3>
 
         <h4>功能</h4>
         <ul>

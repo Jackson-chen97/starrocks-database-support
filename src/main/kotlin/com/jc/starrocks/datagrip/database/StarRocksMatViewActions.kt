@@ -23,10 +23,11 @@ import com.intellij.openapi.project.Project
  * Right-click actions on StarRocks materialized views in the database tree:
  * Refresh / Activate / Deactivate.
  *
- * Uses an already-active connection of the SELECTED object's own data source when present;
- * otherwise transparently establishes one (anonymous requestor so stored credentials apply
- * without a dialog). State cache is updated in-place after Activate/Deactivate so the tree
- * suffix renders without a re-introspect.
+ * Reuses an already-active connection of the SELECTED object's own data source only while its
+ * remote stub is alive (DataGrip's "cook" process can be recycled, leaving a dead RMI port —
+ * see [isRemoteAlive]); otherwise transparently establishes one (anonymous requestor so stored
+ * credentials apply without a dialog). State cache is updated in-place after Activate/Deactivate
+ * so the tree suffix renders without a re-introspect.
  */
 sealed class StarRocksMatViewAction(
     title: String,
@@ -86,14 +87,15 @@ sealed class StarRocksMatViewAction(
     }
 
     private fun withConnection(project: Project, point: DatabaseConnectionPoint, block: (DatabaseConnection) -> Unit) {
-        val existing = DatabaseConnectionManager.getInstance().activeConnections.firstOrNull {
+        val manager = DatabaseConnectionManager.getInstance()
+        val existing = manager.activeConnections.firstOrNull {
             it.connectionPoint?.dataSource?.uniqueId == point.dataSource.uniqueId
         }
-        if (existing != null) {
+        if (existing != null && isRemoteAlive(existing)) {
             block(existing)
             return
         }
-        val ref = DatabaseConnectionManager.getInstance()
+        val ref = manager
             .build(project, point)
             .setRequestor(ConnectionRequestor.Anonymous())
             .createBlockingNonCancellable()
@@ -103,6 +105,21 @@ sealed class StarRocksMatViewAction(
         }
         ref.use { block(it.get()) }
     }
+
+    /**
+     * DataGrip executes JDBC in a separate "cook" process; the IDE-side [DatabaseConnection]
+     * holds an RMI stub bound to that process's localhost port. Cooks are recycled (project
+     * close/reopen, idle shutdown), which leaves cached connections whose stub points at a
+     * dead port — using one then throws java.rmi.ConnectException (Connection refused).
+     * Probe the stub before trusting it; any failure (dead port, closed server connection)
+     * falls through to establishing a fresh connection below.
+     */
+    private fun isRemoteAlive(connection: DatabaseConnection): Boolean =
+        try {
+            connection.remoteConnection.isValid(1000)
+        } catch (t: Throwable) {
+            false
+        }
 
     /**
      * Tree elements come from either the PSI tree (DbElement) or the new model tree, where the

@@ -46,6 +46,7 @@ bin/
 ### Local Tooling Caches ###
 .intellijPlatform/
 .kotlin/
+.tmp-decompile/
 
 ### Plugin verifier local reports (regenerated each run) ###
 verification-*/

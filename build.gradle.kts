@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.jc.starrocks"
-version = "1.0.0"
+version = "1.0.1"
 
 val grammarKitGeneratedRoot = layout.buildDirectory.dir("generated/src/main/java")
 val generatedParserGrammar = layout.buildDirectory.file("generated/grammar/starrocks.bnf")
