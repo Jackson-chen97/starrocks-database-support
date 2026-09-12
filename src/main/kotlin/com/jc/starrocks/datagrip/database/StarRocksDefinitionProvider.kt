@@ -48,6 +48,16 @@ class StarRocksDefinitionProvider : AbstractDefinitionProvider() {
     }
 
     /**
+     * Public entry point for callers outside the class: runs [fetchSources] for a single object
+     * and returns the delivered value (the DDL string, or the [Throwable] captured by [fetchSources]).
+     */
+    fun fetchDdl(obj: DasObject, connection: DatabaseConnectionCore): Any? {
+        var result: Any? = null
+        fetchSources(listOf(obj), connection) { _, value -> result = value }
+        return result
+    }
+
+    /**
      * SHOW CREATE result columns differ per object kind (`Create Table`, `Create View`,
      * `Create Materialized View`, ...): prefer a column whose label mentions "create" or a value
      * starting with CREATE, then fall back to the second / first non-blank column.

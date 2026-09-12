@@ -24,11 +24,11 @@ import java.util.concurrent.ConcurrentHashMap
  * catch NoSuchElementException either — both custom terminations abort the whole tables pass.
  * Subclassing TableIt keeps every iteration/termination semantics platform-owned.
  *
- * Membership is decided by `information_schema.materialized_views` (async MVs only; sync MVs are
- * base tables to JDBC and stay where they are). That same query carries each MV's activity state,
- * which is published to [StarRocksMatViewStatus] for the tree suffix — so no connection-time
- * loader and no `<database.connectionInterceptor>` extension is involved any more.
- * Any query failure degrades to the stock behaviour instead of breaking introspection.
+ * Membership is decided by `SHOW MATERIALIZED VIEWS FROM <db>` (planner-free metadata; async MVs
+ * only, since sync MVs are base tables to JDBC and stay where they are). The same output carries
+ * each MV's activity state, which is published to [StarRocksMatViewStatus] for the tree suffix —
+ * so no connection-time loader and no `<database.connectionInterceptor>` extension is involved
+ * any more. Any query failure degrades to the stock behaviour instead of breaking introspection.
  */
 class StarRocksMetadataWrapper(
     connection: DatabaseConnectionCore,
@@ -71,55 +71,52 @@ class StarRocksMetadataWrapper(
     }
 
     /**
-     * One `information_schema.materialized_views` query per database serves both purposes: the MV
+     * One `SHOW MATERIALIZED VIEWS FROM <db>` per database serves both purposes: the MV
      * membership set (which relabels `VIEW` rows) and the activity states feeding
-     * [StarRocksMatViewStatus], whose cache the tree suffix reads. A server that does not expose
-     * `IS_ACTIVE` falls back to the names-only query and keeps rendering without a suffix.
+     * [StarRocksMatViewStatus], whose cache the tree suffix reads. SHOW is used instead of
+     * `information_schema.materialized_views` because the latter goes through the FE planner —
+     * on a cold-starting FE (Full GC / planner timeout) it fails and first-load introspection
+     * would degrade every MV to a plain view, while SHOW is planner-free metadata.
+     * A server that does not expose `IS_ACTIVE` keeps rendering without a suffix.
      */
     private fun materializedViewNames(schema: DatabaseMetaDataWrapper.Schema): Set<String> {
         val dbName = schema.schema ?: return emptySet()
         val key = dbName.lowercase()
         mvNameCache[key]?.let { return it }
-        val safeName = dbName.replace("'", "''")
         val (names, states) = try {
-            queryMatViews(safeName, "TABLE_NAME, IS_ACTIVE")
+            queryMatViews(dbName)
         } catch (t: Throwable) {
-            LOG.info("StarRocks MV state query failed for '$dbName', retrying names only: ${t.message}")
-            try {
-                queryMatViews(safeName, "TABLE_NAME")
-            } catch (retry: Throwable) {
-                LOG.info("StarRocks MV membership query failed for '$dbName': ${retry.message}")
-                emptySet<String>() to emptyMap<String, MatViewState>()
-            }
+            LOG.info("StarRocks MV membership query failed for '$dbName': ${t.message}")
+            emptySet<String>() to emptyMap<String, MatViewState>()
         }
         if (states.isNotEmpty()) StarRocksMatViewStatus.replace(key, states)
         mvNameCache[key] = names
         return names
     }
 
-    private fun queryMatViews(
-        safeDatabaseName: String,
-        columns: String,
-    ): Pair<Set<String>, Map<String, MatViewState>> =
+    /**
+     * `SHOW MATERIALIZED VIEWS FROM <db>` output carries `name` (3rd), `is_active` and
+     * `inactive_reason` in 3.5.x, but the column set has shifted across versions — resolve
+     * positions from the result-set metadata with positional fallbacks.
+     */
+    private fun queryMatViews(databaseName: String): Pair<Set<String>, Map<String, MatViewState>> =
         JdbcNativeUtil.computeRemote {
             val names = HashSet<String>()
             val states = HashMap<String, MatViewState>()
-            val withState = columns.contains("IS_ACTIVE")
+            val safeName = databaseName.replace("`", "``")
             val statement = myConnection.remoteConnection.createStatement()
             try {
-                val rs = statement.executeQuery(
-                    "SELECT $columns FROM information_schema.materialized_views" +
-                        " WHERE TABLE_SCHEMA = '$safeDatabaseName'"
-                )
+                val rs = statement.executeQuery("SHOW MATERIALIZED VIEWS FROM `$safeName`")
                 try {
+                    val meta = rs.metaData
+                    val nameIdx = columnIndex(meta, "name", 3)
+                    val activeIdx = columnIndex(meta, "is_active", 5)
+                    val reasonIdx = columnIndex(meta, "inactive_reason", 6)
                     while (rs.next()) {
-                        val name = rs.getString(1)?.lowercase() ?: continue
+                        val name = rs.getString(nameIdx)?.lowercase() ?: continue
                         names.add(name)
-                        if (withState) {
-                            val raw = rs.getString(2)
-                            val active = parseActive(raw)
-                            states[name] = MatViewState(active, if (active) null else raw)
-                        }
+                        val active = parseActive(rs.getString(activeIdx))
+                        states[name] = MatViewState(active, if (active) null else rs.getString(reasonIdx))
                     }
                 } finally {
                     rs.close()
@@ -129,6 +126,13 @@ class StarRocksMetadataWrapper(
             }
             names to states
         } ?: (emptySet<String>() to emptyMap())
+
+    private fun columnIndex(meta: com.intellij.database.remote.jdbc.RemoteResultSetMetaData, label: String, fallback: Int): Int {
+        for (i in 1..meta.columnCount) {
+            if (meta.getColumnLabel(i).equals(label, ignoreCase = true)) return i
+        }
+        return fallback
+    }
 
     companion object {
         /** Matches JdbcTableType.MATERIALIZED_VIEW title. */

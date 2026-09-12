@@ -31,6 +31,11 @@ object StarRocksMatViewStatus {
         nameToState.forEach { (name, state) -> states[prefix + name.lowercase()] = state }
     }
 
+    /** Forgets one entry (used when its MV is dropped or redefined). */
+    fun remove(database: String, name: String) {
+        if (database.isNotBlank()) states.remove(key(database, name))
+    }
+
     fun get(element: DasObject): MatViewState? {
         val schema = DasUtil.getSchema(element) ?: return null
         return states[key(schema, element.name)]

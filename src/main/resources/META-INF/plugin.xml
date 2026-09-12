@@ -17,7 +17,7 @@
             <li>Database object model: databases, tables, views, materialized views; native <code>SHOW CREATE</code> definition views (Go to DDL) for tables, views, and materialized views.</li>
             <li>Materialized-view DDL is automatically reformatted when its definition tab opens, with one column per line.</li>
             <li>Object resolution and schema-qualified search paths for tables, views, and materialized views in SQL, eliminating incorrect "Unable to resolve" highlights.</li>
-            <li>Materialized-view actions: run <code>REFRESH MATERIALIZED VIEW</code> and activate/deactivate (ACTIVE/INACTIVE) from the context menu; MV status is shown in the database tree.</li>
+            <li>Materialized-view actions: run <code>REFRESH MATERIALIZED VIEW</code> from the context menu, modify a view's DDL in place (create-as-temp → <code>SWAP WITH</code> → drop temp), activate/deactivate (ACTIVE/INACTIVE), and drop; MV status is shown in the database tree.</li>
         </ul>
 
         <h3>功能</h3>
@@ -30,11 +30,29 @@
             <li>数据库对象模型:数据库、表、视图、物化视图;表/视图/物化视图支持原生 <code>SHOW CREATE</code> 定义视图(Go to DDL)。</li>
             <li>物化视图 DDL 打开后自动格式化,列清单每列一行。</li>
             <li>SQL 中表、视图、物化视图的对象解析与 schema 限定搜索路径,消除错误的 "Unable to resolve" 提示。</li>
-            <li>物化视图操作:右键执行 <code>REFRESH MATERIALIZED VIEW</code>、启用/停用(ACTIVE/INACTIVE);数据库树中显示物化视图状态。</li>
+            <li>物化视图操作:右键执行 <code>REFRESH MATERIALIZED VIEW</code>、就地修改视图 DDL(创建临时视图 → <code>SWAP WITH</code> → 删除临时视图,原视图名保持不变)、启用/停用(ACTIVE/INACTIVE)、删除;数据库树中显示物化视图状态。</li>
         </ul>
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>1.0.2</h3>
+
+        <h4>功能 / Features</h4>
+        <ul>
+            <li>新增「修改物化视图」右键操作:在原生 Go-to-DDL 编辑器中编辑视图 DDL,编辑器右上方出现 Apply 按钮,点击后自动通过 创建临时视图 → <code>ALTER MATERIALIZED VIEW ... SWAP WITH ...</code> → 删除临时视图 三步就地应用变更,原视图名保持不变(语句中已改名的沿用新名称);执行期间会话自动切换到视图所在数据库并在完成后还原。</li>
+            <li>新增「删除物化视图」右键操作:确认后执行 <code>DROP MATERIALIZED VIEW</code>,成功后自动刷新数据库树。</li>
+            <li>New "Modify Materialized View" context action: opens the view's DDL in the native Go-to-DDL editor; an Apply button in the editor header applies the edit in place via create-as-temp → <code>ALTER MATERIALIZED VIEW ... SWAP WITH ...</code> → drop-temp, keeping the original view name (a renamed statement is respected). The session switches to the view's schema for the sequence and is restored afterwards.</li>
+            <li>New "Drop Materialized View" context action: runs <code>DROP MATERIALIZED VIEW</code> after confirmation, refreshing the tree on success.</li>
+        </ul>
+
+        <h4>修复 / Fixes</h4>
+        <ul>
+            <li>物化视图归属与激活状态改由 <code>SHOW MATERIALIZED VIEWS</code> 判定:原 <code>information_schema.materialized_views</code> 查询走 FE 优化器,FE 冷启动( GC / planner 超时)时会失败,导致首次加载把物化视图显示成普通视图。</li>
+            <li>Apply 后自动刷新数据库树(定向刷新不可用时回退为整库刷新);<code>ALTER ... SWAP WITH</code> 按语法要求使用裸名,避免限定名解析错误。</li>
+            <li>Materialized-view membership and activity state are now decided via <code>SHOW MATERIALIZED VIEWS</code>: the previous <code>information_schema.materialized_views</code> query goes through the FE planner and fails on a cold-starting FE (GC / planner timeout), rendering MVs as plain views on first load.</li>
+            <li>The tree refreshes automatically after Apply (falling back to a whole-source refresh when targeted refresh is unavailable); <code>ALTER ... SWAP WITH</code> now uses bare names as the syntax requires, avoiding qualified-name parse errors.</li>
+        </ul>
+
         <h3>1.0.1</h3>
 
         <h4>修复 / Fixes</h4>
@@ -78,10 +96,13 @@
         <sql.formatterHelper language="StarRocks" implementationClass="com.jc.starrocks.datagrip.format.StarRocksFormatterHelper"/>
         <completion.contributor language="StarRocks" implementationClass="com.jc.starrocks.datagrip.completion.StarRocksCompletionContributor"/>
         <database.explorer.decoration implementation="com.jc.starrocks.datagrip.database.StarRocksNodeDecoration"/>
+        <editorNotificationProvider implementation="com.jc.starrocks.datagrip.database.StarRocksMatViewApplyBarProvider"/>
     </extensions>
 
     <projectListeners>
         <listener class="com.jc.starrocks.datagrip.database.StarRocksDdlFormatListener"
+                  topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
+        <listener class="com.jc.starrocks.datagrip.database.StarRocksMatViewHeaderButtonListener"
                   topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
     </projectListeners>
 
@@ -105,6 +126,10 @@
                     class="com.jc.starrocks.datagrip.database.RefreshStarRocksMatViewAction"
                     text="Refresh Materialized View"
                     description="Run REFRESH MATERIALIZED VIEW on the selected view"/>
+            <action id="StarRocks.Support.ModifyMatView"
+                    class="com.jc.starrocks.datagrip.database.ModifyStarRocksMatViewAction"
+                    text="Modify Materialized View"
+                    description="Edit the materialized view's DDL and apply it (create-as-temp, SWAP WITH, drop temp)"/>
             <action id="StarRocks.Support.ActivateMatView"
                     class="com.jc.starrocks.datagrip.database.ActivateStarRocksMatViewAction"
                     text="Activate Materialized View"
@@ -113,6 +138,10 @@
                     class="com.jc.starrocks.datagrip.database.DeactivateStarRocksMatViewAction"
                     text="Deactivate Materialized View"
                     description="Run ALTER MATERIALIZED VIEW ... INACTIVE"/>
+            <action id="StarRocks.Support.DropMatView"
+                    class="com.jc.starrocks.datagrip.database.DropStarRocksMatViewAction"
+                    text="Drop Materialized View"
+                    description="Run DROP MATERIALIZED VIEW on the selected view (with confirmation)"/>
         </group>
     </actions>
 

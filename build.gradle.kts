@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.jc.starrocks"
-version = "1.0.1"
+version = "1.0.2"
 
 val grammarKitGeneratedRoot = layout.buildDirectory.dir("generated/src/main/java")
 val generatedParserGrammar = layout.buildDirectory.file("generated/grammar/starrocks.bnf")
@@ -66,6 +66,13 @@ sourceSets {
 }
 
 dependencies {
+    // Compile-time only: the DataGrip 2026.1.4 distribution does not expose a
+    // standalone kotlin-stdlib jar on the plugin compile classpath, and K2 drops
+    // kind=FILE Kotlin classes it cannot resolve against `kotlin.*` types.
+    // kotlin.stdlib.default.dependency=false keeps the stdlib out of the plugin
+    // artifact; the IDE itself provides it at runtime.
+    compileOnly(kotlin("stdlib"))
+
     testImplementation("junit:junit:4.13.2")
     testRuntimeOnly(kotlin("stdlib"))
 
@@ -93,6 +100,11 @@ dependencies {
 }
 
 intellijPlatform {
+    // Bytecode instrumentation (nullness assertions / GUI forms) is optional and breaks on this
+    // machine: the IPG runtime probe checks for a macOS-style "<jdk>/Packages" directory, which
+    // no Windows JDK has. Tests run against the plain (base) jar instead.
+    instrumentCode = false
+
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "261"

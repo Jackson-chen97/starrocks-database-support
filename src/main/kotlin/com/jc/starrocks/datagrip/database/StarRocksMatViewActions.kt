@@ -1,33 +1,24 @@
 package com.jc.starrocks.datagrip.database
 
 import com.intellij.database.dataSource.DatabaseConnection
-import com.intellij.database.dataSource.DatabaseConnectionManager
-import com.intellij.database.dataSource.DatabaseConnectionPoint
-import com.intellij.database.dataSource.connection.ConnectionRequestor
 import com.intellij.database.model.DasObject
-import com.intellij.database.model.ObjectKind
-import com.intellij.database.model.basic.BasicRoot
-import com.intellij.database.psi.DbElement
-import com.intellij.database.psi.DbPsiFacade
 import com.intellij.database.remote.jdbc.helpers.JdbcNativeUtil
-import com.intellij.database.util.DasUtil
-import com.intellij.database.view.DatabaseView
-import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 
 /**
  * Right-click actions on StarRocks materialized views in the database tree:
- * Refresh / Activate / Deactivate.
+ * Refresh / Activate / Deactivate / Drop.
  *
  * Reuses an already-active connection of the SELECTED object's own data source only while its
  * remote stub is alive (DataGrip's "cook" process can be recycled, leaving a dead RMI port —
- * see [isRemoteAlive]); otherwise transparently establishes one (anonymous requestor so stored
- * credentials apply without a dialog). State cache is updated in-place after Activate/Deactivate
- * so the tree suffix renders without a re-introspect.
+ * see [StarRocksMatViewSupport.isRemoteAlive]); otherwise transparently establishes one
+ * (anonymous requestor so stored credentials apply without a dialog). State cache is updated
+ * in-place after Activate/Deactivate so the tree suffix renders without a re-introspect.
  */
 sealed class StarRocksMatViewAction(
     title: String,
@@ -36,38 +27,52 @@ sealed class StarRocksMatViewAction(
 ) : AnAction(title) {
 
     override fun update(e: AnActionEvent) {
-        e.presentation.isEnabledAndVisible = selectedMatViews(e).isNotEmpty()
+        e.presentation.isEnabledAndVisible = StarRocksMatViewSupport.selectedMatViews(e).isNotEmpty()
     }
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val objects = selectedMatViews(e)
+        val objects = StarRocksMatViewSupport.selectedMatViews(e)
         if (objects.isEmpty()) return
+        if (!confirmExecution(project, objects, e)) return
         // Resolve data sources on the EDT: the event's data context is not valid on pooled threads.
-        val targets = objects.mapNotNull { obj -> connectionPoint(project, e, obj)?.let { obj to it } }
+        val targets = objects.mapNotNull { obj ->
+            StarRocksMatViewSupport.connectionPoint(project, e, obj)?.let { obj to it }
+        }
         if (targets.isEmpty()) {
-            notify(project, "Could not resolve the StarRocks data source of the selection", NotificationType.WARNING)
+            StarRocksMatViewSupport.notify(project, "Could not resolve the StarRocks data source of the selection", NotificationType.WARNING)
             return
         }
         if (targets.size < objects.size) {
-            notify(project, "Skipped ${objects.size - targets.size} object(s): data source not resolved", NotificationType.WARNING)
+            StarRocksMatViewSupport.notify(project, "Skipped ${objects.size - targets.size} object(s): data source not resolved", NotificationType.WARNING)
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             targets.groupBy { (_, point) -> point.dataSource.uniqueId }.forEach { (_, group) ->
+                val succeeded = mutableListOf<DasObject>()
                 try {
-                    withConnection(project, group.first().second) { connection ->
-                        group.forEach { (obj, _) -> runStatement(project, connection, obj, e) }
+                    StarRocksMatViewSupport.withConnection(project, group.first().second) { connection ->
+                        group.forEach { (obj, _) ->
+                            if (runStatement(project, connection, obj, e)) succeeded += obj
+                        }
                     }
                 } catch (t: Throwable) {
-                    notify(project, "Connect failed: ${t.message}", NotificationType.ERROR)
+                    StarRocksMatViewSupport.notify(project, "Connect failed: ${t.message}", NotificationType.ERROR)
+                }
+                if (succeeded.isNotEmpty()) {
+                    onSuccess(project, succeeded)
                 }
             }
         }
     }
 
-    private fun runStatement(project: Project, connection: DatabaseConnection, obj: DasObject, e: AnActionEvent) {
-        val target = qualified(obj)
-        try {
+    private fun runStatement(
+        project: Project,
+        connection: DatabaseConnection,
+        obj: DasObject,
+        e: AnActionEvent
+    ): Boolean {
+        val target = StarRocksMatViewSupport.qualified(obj)
+        return try {
             JdbcNativeUtil.performRemote {
                 val statement = connection.remoteConnection.createStatement()
                 try {
@@ -78,106 +83,31 @@ sealed class StarRocksMatViewAction(
                 Unit
             }
             if (afterState != null) {
-                StarRocksMatViewStatus.put(schema(obj), obj.name, MatViewState(afterState, if (afterState) null else "altered"))
+                StarRocksMatViewStatus.put(
+                    StarRocksMatViewSupport.schema(obj), obj.name,
+                    MatViewState(afterState, if (afterState) null else "altered")
+                )
             }
-            notify(project, "${e.presentation.text}: $target — done", NotificationType.INFORMATION)
+            StarRocksMatViewSupport.notify(project, "${e.presentation.text}: $target — done", NotificationType.INFORMATION)
+            true
         } catch (t: Throwable) {
-            notify(project, "${e.presentation.text}: $target — failed: ${t.message}", NotificationType.ERROR)
-        }
-    }
-
-    private fun withConnection(project: Project, point: DatabaseConnectionPoint, block: (DatabaseConnection) -> Unit) {
-        val manager = DatabaseConnectionManager.getInstance()
-        val existing = manager.activeConnections.firstOrNull {
-            it.connectionPoint?.dataSource?.uniqueId == point.dataSource.uniqueId
-        }
-        if (existing != null && isRemoteAlive(existing)) {
-            block(existing)
-            return
-        }
-        val ref = manager
-            .build(project, point)
-            .setRequestor(ConnectionRequestor.Anonymous())
-            .createBlockingNonCancellable()
-        if (ref == null) {
-            notify(project, "Connect failed: no connection available", NotificationType.ERROR)
-            return
-        }
-        ref.use { block(it.get()) }
-    }
-
-    /**
-     * DataGrip executes JDBC in a separate "cook" process; the IDE-side [DatabaseConnection]
-     * holds an RMI stub bound to that process's localhost port. Cooks are recycled (project
-     * close/reopen, idle shutdown), which leaves cached connections whose stub points at a
-     * dead port — using one then throws java.rmi.ConnectException (Connection refused).
-     * Probe the stub before trusting it; any failure (dead port, closed server connection)
-     * falls through to establishing a fresh connection below.
-     */
-    private fun isRemoteAlive(connection: DatabaseConnection): Boolean =
-        try {
-            connection.remoteConnection.isValid(1000)
-        } catch (t: Throwable) {
+            StarRocksMatViewSupport.notify(project, "${e.presentation.text}: $target — failed: ${t.message}", NotificationType.ERROR)
             false
         }
+    }
 
     /**
-     * Tree elements come from either the PSI tree (DbElement) or the new model tree, where the
-     * dasParent chain tops out at a BasicRoot that is NOT a data source. Strategy order:
-     * 1. DbElement (PSI) direct accessor;
-     * 2. match the BasicRoot against DatabaseView.DATABASE_RELATED_DATA_SOURCES nodes — their
-     *    LocalDataSource implements DatabaseConnectionPoint directly;
-     * 3. sole StarRocks data source registered in the project.
+     * Optional confirmation gate shown before anything is executed; returning false aborts the
+     * action. [objects] is the non-empty selection.
      */
-    private fun connectionPoint(project: Project, e: AnActionEvent, obj: DasObject): DatabaseConnectionPoint? {
-        (obj as? DbElement)?.dataSource?.let { ds ->
-            (ds.connectionConfig as? DatabaseConnectionPoint)?.let { return it }
-            // RawDataSource behind the PSI wrapper. getDelegate() is @ApiStatus.Internal;
-            // getDelegateDataSource() is the public accessor for the same object.
-            (ds.delegateDataSource as? DatabaseConnectionPoint)?.let { return it }
-        }
-        var root: BasicRoot? = null
-        var node: DasObject? = obj
-        while (node != null && root == null) {
-            if (node is BasicRoot) root = node else node = node.dasParent
-        }
-        val nodes = e.getData(DatabaseView.DATABASE_RELATED_DATA_SOURCES)?.toList()
-            ?: e.getData(DatabaseView.DATABASE_RELATED_SINGLE_DATA_SOURCE)?.let { listOf(it) }
-            ?: emptyList()
-        nodes.firstOrNull { runCatching { it.modelRoot === root }.getOrDefault(false) }?.let {
-            (it.localDataSource as? DatabaseConnectionPoint)?.let { p -> return p }
-        }
-        nodes.singleOrNull()?.let {
-            (it.localDataSource as? DatabaseConnectionPoint)?.let { p -> return p }
-        }
-        val starRocksSources = DbPsiFacade.getInstance(project).dataSources.filter { it.dbms == StarRocksDbms.INSTANCE }
-        return starRocksSources.singleOrNull()?.connectionConfig as? DatabaseConnectionPoint
-    }
+    protected open fun confirmExecution(project: Project, objects: List<DasObject>, e: AnActionEvent): Boolean = true
 
-    private fun selectedMatViews(e: AnActionEvent): List<DasObject> =
-        e.getData(DatabaseView.DATABASE_ELEMENTS)
-            ?.filter { it.kind == ObjectKind.MAT_VIEW }
-            ?.filterIsInstance<DasObject>()
-            ?: emptyList()
-
-    private fun qualified(obj: DasObject): String {
-        val schema = schema(obj)
-        return listOfNotNull(schema.takeIf { it.isNotBlank() }, obj.name)
-            .joinToString(".") { StarRocksDefinitionProvider.quoteIdentifier(it) }
-    }
-
-    private fun schema(obj: DasObject): String = DasUtil.getSchema(obj) ?: ""
-
-    private fun notify(project: Project, message: String, type: NotificationType) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup(GROUP)
-            .createNotification(message, type)
-            .notify(project)
-    }
-
-    companion object {
-        const val GROUP = "StarRocks Support"
-    }
+    /**
+     * Called on the pooled thread after at least one statement of this action succeeded
+     * (once per data source). Used for side effects such as state cleanup and targeted tree
+     * refresh; must stay fast — heavy work belongs on a separate thread.
+     */
+    protected open fun onSuccess(project: Project, succeeded: List<DasObject>) {}
 }
 
 class RefreshStarRocksMatViewAction : StarRocksMatViewAction(
@@ -197,3 +127,40 @@ class DeactivateStarRocksMatViewAction : StarRocksMatViewAction(
     afterState = false,
     sql = { "ALTER MATERIALIZED VIEW $it INACTIVE" },
 )
+
+class DropStarRocksMatViewAction : StarRocksMatViewAction(
+    "Drop Materialized View",
+    afterState = null,
+    sql = { "DROP MATERIALIZED VIEW $it" },
+) {
+    override fun confirmExecution(project: Project, objects: List<DasObject>, e: AnActionEvent): Boolean {
+        val title = "Drop Materialized View"
+        return if (objects.size == 1) {
+            val target = StarRocksMatViewSupport.qualified(objects.first())
+            Messages.showYesNoDialog(
+                project,
+                "Drop materialized view `$target`?\n\nIt will be dropped permanently.",
+                title,
+                "Yes",
+                "No",
+                Messages.getWarningIcon(),
+            ) == Messages.YES
+        } else {
+            Messages.showYesNoDialog(
+                project,
+                "Drop ${objects.size} materialized views?\n\nThey will be dropped permanently.",
+                title,
+                "Yes",
+                "No",
+                Messages.getWarningIcon(),
+            ) == Messages.YES
+        }
+    }
+
+    override fun onSuccess(project: Project, succeeded: List<DasObject>) {
+        succeeded.forEach {
+            StarRocksMatViewStatus.remove(StarRocksMatViewSupport.schema(it), it.name)
+        }
+        StarRocksMatViewSupport.refreshParents(project, succeeded)
+    }
+}
